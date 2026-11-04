@@ -2,4 +2,5 @@
 -- Cada app: name = nome na lista, file = arquivo .lua nesta pasta, desc = descricao curta.
 return {
   { name = "Contador", file = "contador.lua", desc = "App de exemplo: clique em + e -" },
+  { name = "Snake", file = "snake.lua", desc = "Jogo da cobrinha", cat = "jogos", ver = "1.0" },
 }
