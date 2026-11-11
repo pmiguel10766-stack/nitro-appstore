@@ -3,11 +3,12 @@ return {
     title = "Hacker Brute-Force", 
     w = 52, 
     h = 13,
-    
-    body = function(self, nitro)
+  body = function(self, nitro)
         -- Inicializa o jogo na primeira execução
         if not self.senha_secreta then
-            math.randomseed(os.time() + os.clock())
+            -- Usa o uptime do computador como semente segura no OpenComputers
+            math.randomseed(math.floor(computer.uptime() * 1000000))
+            
             -- Sorteia um valor entre 0 e 255 (00 a FF em hexadecimal) para ser jogável
             self.alvo_num = math.random(0, 255)
             self.senha_secreta = string.format("%02X", self.alvo_num)
