@@ -1,5 +1,4 @@
 -- Mini-Jogo de Brute-Force / Hacker para o Nitro OS
-local component = require("component")
 local computer = require("computer")
 local gpu = component.gpu
 
