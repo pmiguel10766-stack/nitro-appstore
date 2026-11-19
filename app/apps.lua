@@ -4,4 +4,5 @@ return {
   { name = "Contador", file = "contador.lua", desc = "App de exemplo: clique em + e -" },
   { name = "Snake", file = "snake.lua", desc = "Jogo da cobrinha", cat = "jogos", ver = "1.0" },
   { name = "Hacker Brute-Force", file = "hack.lua", desc = "Mini-jogo de invasao de terminais e quebra de firewall.", cat = "Jogos", ver = "1.2" },
+ { name = "NAS Pessoal", file = "nas_pessoal.lua", desc = "Servidor de arquivos pela Rede Local", cat = "Rede", ver = "1.0" },
 }
