@@ -26,13 +26,14 @@ local state = {
   editingPass = false,
   passInput = "",
   authedClients = {},
-  uploads = {}
+  uploads = {},
+  lastBox = nil
 }
 
 local function addLog(msg)
   local clean = tostring(msg or ""):gsub("[^\32-\126]", "?")
-  if #clean > 54 then
-    clean = clean:sub(1, 51) .. "..."
+  if #clean > 52 then
+    clean = clean:sub(1, 49) .. "..."
   end
   table.insert(state.logs, 1, clean)
   if #state.logs > 30 then
@@ -84,17 +85,43 @@ local function refreshFiles(nitro)
       end
     end
   end
-  if state.scroll > math.max(0, #state.files - 6) then
-    state.scroll = math.max(0, #state.files - 6)
+  if state.scroll > math.max(0, #state.files - 5) then
+    state.scroll = math.max(0, #state.files - 5)
   end
 end
 
+local function getNet(nitro)
+  if type(nitro) == "table" and type(nitro.net) == "table" then
+    return nitro.net
+  end
+  return nil
+end
+
 local function syncNet(nitro, logChange)
-  state.hasCard = nitro.net.card() and true or false
+  local net = getNet(nitro)
+  if not net then
+    state.hasCard = false
+    state.portOpen = false
+    state.serverId = "desconhecido"
+    if logChange then
+      addLog("API nitro.net indisponivel")
+    end
+    return
+  end
+
+  local hasCard = false
+  if type(net.card) == "function" then
+    hasCard = net.card() and true or false
+  elseif type(net.id) == "function" then
+    hasCard = net.id() ~= nil
+  end
+  state.hasCard = hasCard
+
   if state.hasCard then
-    state.serverId = tostring(nitro.net.id() or "sem-id")
-    if not state.portOpen then
-      state.portOpen = nitro.net.open(PORT) and true or false
+    local idVal = type(net.id) == "function" and net.id() or "sem-id"
+    state.serverId = tostring(idVal or "sem-id")
+    if not state.portOpen and type(net.open) == "function" then
+      state.portOpen = net.open(PORT) and true or false
       if state.portOpen then
         addLog("Porta " .. PORT .. " aberta. ID: " .. state.serverId:sub(1, 8))
       elseif logChange then
@@ -119,8 +146,11 @@ local function init(nitro)
 end
 
 local function sendReply(nitro, addr, text)
-  if state.hasCard and state.portOpen then
-    nitro.net.send(addr, PORT, text)
+  local net = getNet(nitro)
+  if state.hasCard and state.portOpen and net and type(net.send) == "function" then
+    if #text <= 1800 then
+      net.send(addr, PORT, text)
+    end
   end
 end
 
@@ -301,6 +331,14 @@ local function handleEnd(nitro, addr, rest)
   end
 end
 
+local function getBox(self)
+  local x0 = tonumber(self and self.x) or 1
+  local y0 = tonumber(self and self.y) or 1
+  local w = tonumber(self and self.w) or 60
+  local h = tonumber(self and self.h) or 20
+  return x0, y0, w, h
+end
+
 return {
   title = "NAS Pessoal",
   w = 60,
@@ -309,56 +347,84 @@ return {
   body = function(self, nitro)
     init(nitro)
     local c = nitro.colors
-    nitro.rect(1, 1, self.w, self.h, c.bg)
+    local x0, y0, w, h = getBox(self)
+    state.lastBox = { x0 = x0, y0 = y0, w = w, h = h }
 
-    nitro.rect(1, 1, self.w, 3, c.panel)
+    local innerW = math.max(20, w - 2)
+    local innerH = math.max(10, h - 1)
+    nitro.rect(x0 + 1, y0 + 1, innerW, innerH, c.bg)
+
+    local hdrH = math.min(3, innerH)
+    nitro.rect(x0 + 1, y0 + 1, innerW, hdrH, c.panel)
+
     local cardTxt = state.hasCard and (state.portOpen and "Wi-Fi: ON" or "Wi-Fi: BLOQ") or "Wi-Fi: OFF"
     local cardCol = (state.hasCard and state.portOpen) and c.ok or c.err
-    nitro.put(2, 1, "ID: " .. state.serverId:sub(1, 16), c.text, c.panel, 22)
-    nitro.put(25, 1, cardTxt, cardCol, c.panel, 14)
+    nitro.put(x0 + 2, y0 + 1, "ID: " .. state.serverId:sub(1, 14), c.text, c.panel, 20)
+    nitro.put(x0 + 23, y0 + 1, cardTxt, cardCol, c.panel, 13)
 
     local btnLabel = state.editingPass and "[Salvar]" or "[Definir senha]"
     local btnCol = state.editingPass and c.ok or c.accent
-    nitro.put(40, 1, btnLabel, c.bg, btnCol, 19)
+    nitro.put(x0 + 38, y0 + 1, btnLabel, c.bg, btnCol, math.min(18, innerW - 37))
 
-    local passStatus = (state.password == "") and "Aberta" or "Ativa"
-    local passCol = (state.password == "") and c.warn or c.ok
-    if state.editingPass then
-      nitro.put(2, 2, "Nova senha: " .. state.passInput .. "_", c.accent, c.panel, 56)
-    else
-      nitro.put(2, 2, "Pasta: " .. SHARE_DIR, c.dim, c.panel, 26)
-      nitro.put(29, 2, "Senha: " .. passStatus, passCol, c.panel, 15)
-      nitro.put(46, 2, "[F5] Atual.", c.text, c.panel, 13)
+    if hdrH >= 2 then
+      local passStatus = (state.password == "") and "Aberta" or "Ativa"
+      local passCol = (state.password == "") and c.warn or c.ok
+      if state.editingPass then
+        nitro.put(x0 + 2, y0 + 2, "Nova senha: " .. state.passInput .. "_", c.accent, c.panel, innerW - 2)
+      else
+        nitro.put(x0 + 2, y0 + 2, "Pasta: " .. SHARE_DIR, c.dim, c.panel, 24)
+        nitro.put(x0 + 27, y0 + 2, "Senha: " .. passStatus, passCol, c.panel, 14)
+        nitro.put(x0 + 43, y0 + 2, "[F5] Atual.", c.text, c.panel, math.min(13, innerW - 42))
+      end
     end
 
-    local kbUsed = string.format("%.1f", state.totalBytes / 1024)
-    nitro.put(2, 3, "Arquivos: " .. #state.files .. " | Total usado: " .. kbUsed .. " KB (max 64KB/arq)", c.text, c.panel, 56)
+    if hdrH >= 3 then
+      local kbUsed = string.format("%.1f", state.totalBytes / 1024)
+      nitro.put(x0 + 2, y0 + 3, "Arq: " .. #state.files .. " | Usado: " .. kbUsed .. " KB (max 64KB/arq)", c.text, c.panel, innerW - 2)
+    end
 
-    nitro.put(2, 5, "ARQUIVOS COMPARTILHADOS (Setas: rolar)", c.accent, c.bg, 56)
-    nitro.rect(2, 6, 56, 6, c.panel)
-    if #state.files == 0 then
-      nitro.put(3, 8, "(Nenhum arquivo em /Download/nuvem/)", c.dim, c.panel, 54)
-    else
-      for row = 0, 5 do
-        local idx = state.scroll + row + 1
-        local f = state.files[idx]
-        if f then
-          local szStr = string.format("%6d B", f.size)
-          nitro.put(3, 6 + row, f.name, c.text, c.panel, 42)
-          nitro.put(47, 6 + row, szStr, c.dim, c.panel, 10)
+    local filesTitleY = y0 + 5
+    local filesBoxY = y0 + 6
+    local filesBoxH = 5
+    if filesTitleY <= y0 + innerH then
+      nitro.put(x0 + 2, filesTitleY, "ARQUIVOS COMPARTILHADOS (Setas: rolar)", c.accent, c.bg, innerW - 2)
+    end
+    if filesBoxY <= y0 + innerH then
+      local actualFilesH = math.min(filesBoxH, (y0 + innerH) - filesBoxY + 1)
+      nitro.rect(x0 + 2, filesBoxY, innerW - 2, actualFilesH, c.panel)
+      if #state.files == 0 then
+        nitro.put(x0 + 3, filesBoxY + 1, "(Nenhum arquivo em " .. SHARE_DIR .. ")", c.dim, c.panel, innerW - 4)
+      else
+        for row = 0, actualFilesH - 1 do
+          local idx = state.scroll + row + 1
+          local f = state.files[idx]
+          if f then
+            local szStr = string.format("%6d B", f.size)
+            nitro.put(x0 + 3, filesBoxY + row, f.name, c.text, c.panel, math.max(8, innerW - 14))
+            nitro.put(x0 + innerW - 10, filesBoxY + row, szStr, c.dim, c.panel, 10)
+          end
         end
       end
     end
 
-    nitro.put(2, 13, "LOG DE EVENTOS", c.accent, c.bg, 56)
-    nitro.rect(2, 14, 56, 6, c.panel)
-    if #state.logs == 0 then
-      nitro.put(3, 16, "Aguardando conexoes na porta 4343...", c.dim, c.panel, 54)
-    else
-      for row = 0, 5 do
-        local entry = state.logs[row + 1]
-        if entry then
-          nitro.put(3, 14 + row, "> " .. entry, c.text, c.panel, 54)
+    local logTitleY = y0 + 12
+    local logBoxY = y0 + 13
+    if logTitleY <= y0 + innerH then
+      nitro.put(x0 + 2, logTitleY, "LOG DE EVENTOS", c.accent, c.bg, innerW - 2)
+    end
+    if logBoxY <= y0 + innerH then
+      local actualLogH = math.min(5, (y0 + innerH) - logBoxY + 1)
+      if actualLogH > 0 then
+        nitro.rect(x0 + 2, logBoxY, innerW - 2, actualLogH, c.panel)
+        if #state.logs == 0 then
+          nitro.put(x0 + 3, logBoxY + 1, "Aguardando conexoes na porta 4343...", c.dim, c.panel, innerW - 4)
+        else
+          for row = 0, actualLogH - 1 do
+            local entry = state.logs[row + 1]
+            if entry then
+              nitro.put(x0 + 3, logBoxY + row, "> " .. entry, c.text, c.panel, innerW - 4)
+            end
+          end
         end
       end
     end
@@ -408,7 +474,7 @@ return {
       end
       return true
     elseif code == 208 then
-      if state.scroll < math.max(0, #state.files - 6) then
+      if state.scroll < math.max(0, #state.files - 5) then
         state.scroll = state.scroll + 1
       end
       return true
@@ -417,7 +483,13 @@ return {
   end,
 
   onTouch = function(self, x, y, nitro)
-    if y == 1 and x >= 40 and x <= 58 then
+    local box = state.lastBox or {}
+    local x0 = box.x0 or tonumber(self and self.x) or 1
+    local y0 = box.y0 or tonumber(self and self.y) or 1
+    local w = box.w or tonumber(self and self.w) or 60
+    local innerW = math.max(20, w - 2)
+
+    if y == y0 + 1 and x >= x0 + 38 and x <= x0 + innerW then
       if state.editingPass then
         state.password = state.passInput
         state.editingPass = false
@@ -428,7 +500,7 @@ return {
         state.passInput = state.password
       end
       return true
-    elseif y == 2 and x >= 46 and x <= 58 and not state.editingPass then
+    elseif y == y0 + 2 and x >= x0 + 43 and x <= x0 + innerW and not state.editingPass then
       syncNet(nitro, true)
       refreshFiles(nitro)
       addLog("Lista atualizada")
