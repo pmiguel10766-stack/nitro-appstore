@@ -1,9 +1,16 @@
--- Desvio no Reator (Fuga de Radiação) - Nitro OS 2D App
+-- Desvio no Reator (Fuga de Radiacao) - Nitro OS 2D App
 local CFG_NAME = "recorde"
 
+local function safeCall(fn, ...)
+  if type(fn) == "function" then
+    return pcall(fn, ...)
+  end
+  return false
+end
+
 local function now()
-  if type(nitro) == "table" and type(nitro.uptime) == "function" then
-    local ok, t = pcall(nitro.uptime)
+  if type(nitro) == "table" then
+    local ok, t = safeCall(nitro.uptime)
     if ok and type(t) == "number" then return t end
   end
   return 0
@@ -12,8 +19,8 @@ end
 local function getSize()
   local w = (type(nitro) == "table" and tonumber(nitro.width)) or 56
   local h = (type(nitro) == "table" and tonumber(nitro.height)) or 22
-  if type(nitro) == "table" and type(nitro.gpu) == "table" and type(nitro.gpu.getResolution) == "function" then
-    local ok, gw, gh = pcall(nitro.gpu.getResolution)
+  if type(nitro) == "table" and type(nitro.gpu) == "table" then
+    local ok, gw, gh = safeCall(nitro.gpu.getResolution)
     if ok and type(gw) == "number" and type(gh) == "number" then
       w, h = gw, gh
     end
@@ -38,22 +45,30 @@ end
 
 local function rectBg(x, y, w, h, bg)
   if w <= 0 or h <= 0 then return end
-  if type(nitro) == "table" and type(nitro.rect) == "function" then
-    pcall(nitro.rect, x, y, w, h, bg)
-  elseif type(nitro) == "table" and type(nitro.gpu) == "table" and type(nitro.gpu.fill) == "function" then
-    if bg and type(nitro.gpu.setBackground) == "function" then pcall(nitro.gpu.setBackground, bg) end
-    pcall(nitro.gpu.fill, x, y, w, h, " ")
+  if type(nitro) == "table" then
+    if type(nitro.rect) == "function" then
+      safeCall(nitro.rect, x, y, w, h, bg)
+      return
+    elseif type(nitro.gpu) == "table" and type(nitro.gpu.fill) == "function" then
+      if bg then safeCall(nitro.gpu.setBackground, bg) end
+      safeCall(nitro.gpu.fill, x, y, w, h, " ")
+      return
+    end
   end
 end
 
 local function put(x, y, txt, fg, bg)
   local s = tostring(txt or "")
-  if type(nitro) == "table" and type(nitro.put) == "function" then
-    pcall(nitro.put, x, y, s, fg, bg)
-  elseif type(nitro) == "table" and type(nitro.gpu) == "table" and type(nitro.gpu.set) == "function" then
-    if bg and type(nitro.gpu.setBackground) == "function" then pcall(nitro.gpu.setBackground, bg) end
-    if fg and type(nitro.gpu.setForeground) == "function" then pcall(nitro.gpu.setForeground, fg) end
-    pcall(nitro.gpu.set, x, y, s)
+  if type(nitro) == "table" then
+    if type(nitro.put) == "function" then
+      safeCall(nitro.put, x, y, s, fg, bg)
+      return
+    elseif type(nitro.gpu) == "table" and type(nitro.gpu.set) == "function" then
+      if bg then safeCall(nitro.gpu.setBackground, bg) end
+      if fg then safeCall(nitro.gpu.setForeground, fg) end
+      safeCall(nitro.gpu.set, x, y, s)
+      return
+    end
   end
 end
 
@@ -71,16 +86,19 @@ end
 
 local function pull(dt)
   if type(nitro) == "table" and type(nitro.pull) == "function" then
-    local ok, ev, addr, chr, code = pcall(nitro.pull, dt or 0.05)
+    local ok, ev, addr, chr, code = safeCall(nitro.pull, dt or 0.05)
     if ok then return ev, addr, chr, code end
+  end
+  if type(os) == "table" and type(os.sleep) == "function" then
+    safeCall(os.sleep, dt or 0.05)
   end
   return nil
 end
 
 local function loadCfg()
   local out = { recorde = 0, modo = "normal" }
-  if type(nitro) == "table" and type(nitro.cfg) == "table" and type(nitro.cfg.load) == "function" then
-    local ok, data = pcall(nitro.cfg.load, CFG_NAME)
+  if type(nitro) == "table" and type(nitro.cfg) == "table" then
+    local ok, data = safeCall(nitro.cfg.load, CFG_NAME)
     if ok and type(data) == "table" then
       out.recorde = math.max(0, math.floor(tonumber(data.recorde) or 0))
       if data.modo == "rapido" then out.modo = "rapido" end
@@ -92,8 +110,8 @@ local function loadCfg()
 end
 
 local function saveCfg(cfg)
-  if type(nitro) == "table" and type(nitro.cfg) == "table" and type(nitro.cfg.save) == "function" then
-    pcall(nitro.cfg.save, CFG_NAME, {
+  if type(nitro) == "table" and type(nitro.cfg) == "table" then
+    safeCall(nitro.cfg.save, CFG_NAME, {
       recorde = math.max(0, math.floor(tonumber(cfg.recorde) or 0)),
       modo = (cfg.modo == "rapido") and "rapido" or "normal"
     })
@@ -416,5 +434,7 @@ if not ok then
   rectBg(1, 1, w, h, p.danger)
   put(2, 2, "Erro no Desvio no Reator:", p.text, p.danger)
   put(2, 3, tostring(err), p.player, p.danger)
-  pull(2.0)
+  if type(nitro) == "table" and type(nitro.pull) == "function" then
+    safeCall(nitro.pull, 2.0)
+  end
 end
