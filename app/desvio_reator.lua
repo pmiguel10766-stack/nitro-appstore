@@ -24,38 +24,25 @@ end
 local function getPalette()
   local c = (type(nitro) == "table" and type(nitro.colors)) or {}
   return {
-    bg      = c.black  or c.bg     or 0x090A0F,
-    panel   = c.gray   or c.panel  or 0x111827,
-    wall    = c.blue   or c.accent or 0x2563EB,
-    accent  = c.cyan   or c.blue   or 0x38BDF8,
-    danger  = c.red    or 0xEF4444,
-    player  = c.yellow or 0xFACC15,
-    shield  = c.green  or 0x22C55E,
-    text    = c.white  or 0xF8FAFC,
-    muted   = c.silver or c.gray   or 0x94A3B8
+    bg     = c.bg     or 0x090A0F,
+    panel  = c.panel  or c.barbg or 0x111827,
+    wall   = c.accent or 0x2563EB,
+    accent = c.accent or 0x38BDF8,
+    danger = c.err    or 0xEF4444,
+    player = c.warn   or 0xFACC15,
+    shield = c.ok     or 0x22C55E,
+    text   = c.text   or 0xF8FAFC,
+    muted  = c.dim    or 0x94A3B8
   }
 end
 
-local function rect(x, y, w, h, bg, fg, ch)
+local function rectBg(x, y, w, h, bg)
   if w <= 0 or h <= 0 then return end
   if type(nitro) == "table" and type(nitro.rect) == "function" then
-    pcall(nitro.rect, x, y, w, h, bg, fg, ch or " ")
+    pcall(nitro.rect, x, y, w, h, bg)
   elseif type(nitro) == "table" and type(nitro.gpu) == "table" and type(nitro.gpu.fill) == "function" then
     if bg and type(nitro.gpu.setBackground) == "function" then pcall(nitro.gpu.setBackground, bg) end
-    if fg and type(nitro.gpu.setForeground) == "function" then pcall(nitro.gpu.setForeground, fg) end
-    pcall(nitro.gpu.fill, x, y, w, h, ch or " ")
-  end
-end
-
-local function box(x, y, w, h, bg, fg)
-  if type(nitro) == "table" and type(nitro.box) == "function" then
-    pcall(nitro.box, x, y, w, h, bg, fg)
-  else
-    rect(x, y, w, h, bg, fg, " ")
-    if type(nitro) == "table" and type(nitro.put) == "function" then
-      pcall(nitro.put, x, y, string.rep("▀", math.max(1, w)), fg, bg)
-      pcall(nitro.put, x, y + h - 1, string.rep("▄", math.max(1, w)), fg, bg)
-    end
+    pcall(nitro.gpu.fill, x, y, w, h, " ")
   end
 end
 
@@ -70,10 +57,22 @@ local function put(x, y, txt, fg, bg)
   end
 end
 
+local function box(x, y, w, h, bg, borderFg)
+  rectBg(x, y, w, h, bg)
+  if w >= 2 and h >= 2 then
+    put(x, y, string.rep("▀", w), borderFg, bg)
+    put(x, y + h - 1, string.rep("▄", w), borderFg, bg)
+    for row = y + 1, y + h - 2 do
+      put(x, row, "│", borderFg, bg)
+      put(x + w - 1, row, "│", borderFg, bg)
+    end
+  end
+end
+
 local function pull(dt)
   if type(nitro) == "table" and type(nitro.pull) == "function" then
-    local ok, ev, a, b, c = pcall(nitro.pull, dt or 0.05)
-    if ok then return ev, a, b, c end
+    local ok, ev, addr, chr, code = pcall(nitro.pull, dt or 0.05)
+    if ok then return ev, addr, chr, code end
   end
   return nil
 end
@@ -166,13 +165,13 @@ local function run()
   end
 
   local function render()
-    rect(1, 1, w, h, pal.bg, pal.text, " ")
+    rectBg(1, 1, w, h, pal.bg)
 
     for _, st in ipairs(stars) do
       put(st.x, st.y, st.s == 2 and "*" or ".", pal.muted, pal.bg)
     end
 
-    rect(1, 1, w, 1, pal.panel, pal.text, " ")
+    rectBg(1, 1, w, 1, pal.panel)
     put(2, 1, "DESVIO NO REATOR // FUGA DE RADIACAO", pal.danger, pal.panel)
 
     local speed = math.floor((0.28 - stepDelay) / 0.19 * 8 + 0.5)
@@ -183,8 +182,10 @@ local function run()
     put(2, 2, string.format("Pts: %-6d  Rec: %-6d  Escudo: %s",
       math.floor(score), best, shield and "ON" or "OFF"), pal.text, pal.bg)
 
-    rect(trackX, topY, 2, botY - topY + 1, pal.bg, pal.wall, "█")
-    rect(trackX + trackW - 2, topY, 2, botY - topY + 1, pal.bg, pal.wall, "█")
+    for y = topY, botY do
+      put(trackX, y, "██", pal.wall, pal.bg)
+      put(trackX + trackW - 2, y, "██", pal.wall, pal.bg)
+    end
     put(trackX, topY - 1, string.rep("▀", trackW), pal.accent, pal.bg)
 
     for l = 1, lanes - 1 do
@@ -202,9 +203,9 @@ local function run()
           put(ox, ob.y, "O", pal.text, pal.accent)
           put(ox + 1, ob.y, ")", pal.accent, pal.bg)
         else
-          local glow = (math.floor(now() * 8) % 2 == 0) and "▓" or "▒"
-          rect(ox - 1, ob.y, 3, 1, pal.bg, pal.danger, glow)
-          put(ox, ob.y, "▲", pal.text, pal.bg)
+          local glow = (math.floor(now() * 8) % 2 == 0) and "▓▓▓" or "▒▒▒"
+          put(ox - 1, ob.y, glow, pal.danger, pal.bg)
+          put(ox, ob.y, "▲", pal.text, pal.danger)
         end
       end
     end
@@ -320,11 +321,11 @@ local function run()
   end
 
   while true do
-    local ev, a, b = pull(0.05)
+    local ev, _, chr, code = pull(0.05)
 
-    if ev == "key_down" or ev == "key" then
-      local code = tonumber(b)
-      local ch = type(a) == "number" and string.char(a):lower() or tostring(a or ""):lower()
+    if ev == "key_down" then
+      local ch = (type(chr) == "number" and chr > 0 and chr < 256) and string.char(chr):lower() or ""
+      code = tonumber(code)
 
       if state == "menu" then
         if code == 200 or ch == "w" then
@@ -373,8 +374,8 @@ local function run()
           state = "playing"
         end
       end
-    elseif ev == "touch" or ev == "click" then
-      local tx, ty = tonumber(a), tonumber(b)
+    elseif ev == "touch" then
+      local tx, ty = tonumber(chr), tonumber(code)
       if state == "menu" then
         local bw, bh = math.min(w - 6, 40), 10
         local bx, by = math.floor((w - bw) / 2), math.floor(h / 2) - 5
@@ -412,7 +413,7 @@ local ok, err = pcall(run)
 if not ok then
   local p = getPalette()
   local w, h = getSize()
-  rect(1, 1, w, h, p.danger, p.text, " ")
+  rectBg(1, 1, w, h, p.danger)
   put(2, 2, "Erro no Desvio no Reator:", p.text, p.danger)
   put(2, 3, tostring(err), p.player, p.danger)
   pull(2.0)
