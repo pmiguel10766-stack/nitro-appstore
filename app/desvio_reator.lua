@@ -1,440 +1,346 @@
--- Desvio no Reator (Fuga de Radiacao) - Nitro OS 2D App
-local CFG_NAME = "recorde"
+-- name: Fuga de Radiacao
+-- desc: Desvie o vazamento do reator para os tanques de contencao
+-- ver: 1.1
+-- LIMITES: jogo de ficcao (liquido verde ficticio). So texto/ASCII, sem som, imagens ou rede.
+-- Recorde salvo com nitro.cfg.
 
-local function safeCall(fn, ...)
-  if type(fn) == "function" then
-    return pcall(fn, ...)
-  end
-  return false
-end
+return function(args)
+  local gpu, nitro = args.gpu, args.nitro
+  local C = nitro.colors
+  local W, H = 40, 16
+  local RROW = math.floor(H / 2)
 
-local function now()
-  if type(nitro) == "table" then
-    local ok, t = safeCall(nitro.uptime)
-    if ok and type(t) == "number" then return t end
-  end
-  return 0
-end
+  local T_EMPTY, T_WALL, T_PIPE_H, T_PIPE_V = ".", "#", "=", "|"
+  local T_VALVE, T_TANK, T_REACTOR, T_LEAK = "+", "T", "R", "~"
 
-local function getSize()
-  local w = (type(nitro) == "table" and tonumber(nitro.width)) or 56
-  local h = (type(nitro) == "table" and tonumber(nitro.height)) or 22
-  if type(nitro) == "table" and type(nitro.gpu) == "table" then
-    local ok, gw, gh = safeCall(nitro.gpu.getResolution)
-    if ok and type(gw) == "number" and type(gh) == "number" then
-      w, h = gw, gh
+  local STEP_TIME = 0.6          -- segundos entre passos do vazamento
+  local MAX_LEAKS = 8            -- teto de vazamentos ativos
+  local TRAIL_LIFE = 4           -- passos ate o rastro sumir
+  local DAMAGE_PER_HIT = 10
+  local MAX_DAMAGE = 100
+
+  local function loadBest()
+    local ok, data = pcall(nitro.cfg.load, "recorde")
+    if ok and type(data) == "table" and type(data.melhor) == "number" then
+      return math.floor(data.melhor)
     end
-  end
-  return math.max(38, math.floor(w)), math.max(15, math.floor(h))
-end
-
-local function getPalette()
-  local c = (type(nitro) == "table" and type(nitro.colors)) or {}
-  return {
-    bg     = c.bg     or 0x090A0F,
-    panel  = c.panel  or c.barbg or 0x111827,
-    wall   = c.accent or 0x2563EB,
-    accent = c.accent or 0x38BDF8,
-    danger = c.err    or 0xEF4444,
-    player = c.warn   or 0xFACC15,
-    shield = c.ok     or 0x22C55E,
-    text   = c.text   or 0xF8FAFC,
-    muted  = c.dim    or 0x94A3B8
-  }
-end
-
-local function rectBg(x, y, w, h, bg)
-  if w <= 0 or h <= 0 then return end
-  if type(nitro) == "table" then
-    if type(nitro.rect) == "function" then
-      safeCall(nitro.rect, x, y, w, h, bg)
-      return
-    elseif type(nitro.gpu) == "table" and type(nitro.gpu.fill) == "function" then
-      if bg then safeCall(nitro.gpu.setBackground, bg) end
-      safeCall(nitro.gpu.fill, x, y, w, h, " ")
-      return
-    end
-  end
-end
-
-local function put(x, y, txt, fg, bg)
-  local s = tostring(txt or "")
-  if type(nitro) == "table" then
-    if type(nitro.put) == "function" then
-      safeCall(nitro.put, x, y, s, fg, bg)
-      return
-    elseif type(nitro.gpu) == "table" and type(nitro.gpu.set) == "function" then
-      if bg then safeCall(nitro.gpu.setBackground, bg) end
-      if fg then safeCall(nitro.gpu.setForeground, fg) end
-      safeCall(nitro.gpu.set, x, y, s)
-      return
-    end
-  end
-end
-
-local function box(x, y, w, h, bg, borderFg)
-  rectBg(x, y, w, h, bg)
-  if w >= 2 and h >= 2 then
-    put(x, y, string.rep("▀", w), borderFg, bg)
-    put(x, y + h - 1, string.rep("▄", w), borderFg, bg)
-    for row = y + 1, y + h - 2 do
-      put(x, row, "│", borderFg, bg)
-      put(x + w - 1, row, "│", borderFg, bg)
-    end
-  end
-end
-
-local function pull(dt)
-  if type(nitro) == "table" and type(nitro.pull) == "function" then
-    local ok, ev, addr, chr, code = safeCall(nitro.pull, dt or 0.05)
-    if ok then return ev, addr, chr, code end
-  end
-  if type(os) == "table" and type(os.sleep) == "function" then
-    safeCall(os.sleep, dt or 0.05)
-  end
-  return nil
-end
-
-local function loadCfg()
-  local out = { recorde = 0, modo = "normal" }
-  if type(nitro) == "table" and type(nitro.cfg) == "table" then
-    local ok, data = safeCall(nitro.cfg.load, CFG_NAME)
-    if ok and type(data) == "table" then
-      out.recorde = math.max(0, math.floor(tonumber(data.recorde) or 0))
-      if data.modo == "rapido" then out.modo = "rapido" end
-    elseif ok and type(data) == "number" then
-      out.recorde = math.max(0, math.floor(data))
-    end
-  end
-  return out
-end
-
-local function saveCfg(cfg)
-  if type(nitro) == "table" and type(nitro.cfg) == "table" then
-    safeCall(nitro.cfg.save, CFG_NAME, {
-      recorde = math.max(0, math.floor(tonumber(cfg.recorde) or 0)),
-      modo = (cfg.modo == "rapido") and "rapido" or "normal"
-    })
-  end
-end
-
-local function run()
-  local w, h = getSize()
-  local pal = getPalette()
-  local cfg = loadCfg()
-  local best = cfg.recorde
-  local fastMode = (cfg.modo == "rapido")
-
-  local stars = {}
-  for i = 1, 25 do
-    stars[i] = { x = math.random(1, w), y = math.random(1, h), s = math.random(1, 2) }
-  end
-  local scroll = 0
-
-  local lanes = 3
-  local laneW = 9
-  local trackW = lanes * laneW + 4
-  local trackX = math.max(2, math.floor((w - trackW) / 2))
-  local topY = 4
-  local botY = math.max(topY + 7, h - 3)
-  local playerY = botY - 1
-
-  local state = "menu" -- "menu", "playing", "paused", "gameover"
-  local menuIdx = 1 -- 1: Jogar, 2: Velocidade, 3: Sair
-  local lane = 2
-  local score = 0
-  local shield = false
-  local baseDelay = fastMode and 0.20 or 0.28
-  local stepDelay = baseDelay
-  local lastStep = now()
-  local lastScore = now()
-  local spawnCd = 0
-  local obstacles = {}
-
-  local function reset()
-    baseDelay = fastMode and 0.20 or 0.28
-    stepDelay = baseDelay
-    lane = 2
-    score = 0
-    shield = false
-    spawnCd = 0
-    obstacles = {}
-    scroll = 0
-    lastStep = now()
-    lastScore = now()
+    return 0
   end
 
-  local function toggleSpeed()
-    fastMode = not fastMode
-    cfg.modo = fastMode and "rapido" or "normal"
-    saveCfg(cfg)
+  local function saveBest(val)
+    pcall(nitro.cfg.save, "recorde", { melhor = math.floor(val) })
   end
 
-  local function laneX(l)
-    return trackX + 2 + (l - 1) * laneW + math.floor(laneW / 2)
-  end
-
-  local function moveLeft()
-    if lane > 1 then lane = lane - 1 end
-  end
-
-  local function moveRight()
-    if lane < lanes then lane = lane + 1 end
-  end
-
-  local function render()
-    rectBg(1, 1, w, h, pal.bg)
-
-    for _, st in ipairs(stars) do
-      put(st.x, st.y, st.s == 2 and "*" or ".", pal.muted, pal.bg)
-    end
-
-    rectBg(1, 1, w, 1, pal.panel)
-    put(2, 1, "DESVIO NO REATOR // FUGA DE RADIACAO", pal.danger, pal.panel)
-
-    local speed = math.floor((0.28 - stepDelay) / 0.19 * 8 + 0.5)
-    speed = math.max(0, math.min(8, speed))
-    local bar = string.rep("█", speed) .. string.rep("░", 8 - speed)
-    put(math.max(2, w - 14), 1, "VEL " .. bar, pal.accent, pal.panel)
-
-    put(2, 2, string.format("Pts: %-6d  Rec: %-6d  Escudo: %s",
-      math.floor(score), best, shield and "ON" or "OFF"), pal.text, pal.bg)
-
-    for y = topY, botY do
-      put(trackX, y, "██", pal.wall, pal.bg)
-      put(trackX + trackW - 2, y, "██", pal.wall, pal.bg)
-    end
-    put(trackX, topY - 1, string.rep("▀", trackW), pal.accent, pal.bg)
-
-    for l = 1, lanes - 1 do
-      local dx = trackX + 2 + l * laneW - math.floor(laneW / 2)
-      for y = topY + (scroll % 2), botY, 2 do
-        put(dx, y, "│", pal.muted, pal.bg)
-      end
-    end
-
-    for _, ob in ipairs(obstacles) do
-      local ox = laneX(ob.lane)
-      if ob.y >= topY and ob.y <= botY then
-        if ob.kind == "cool" then
-          put(ox - 1, ob.y, "(", pal.accent, pal.bg)
-          put(ox, ob.y, "O", pal.text, pal.accent)
-          put(ox + 1, ob.y, ")", pal.accent, pal.bg)
+  -- grade: tabela de linhas; trail: posicoes com tempo de vida (rastro)
+  local function newGrid(level, tanks)
+    local grid = {}
+    for y = 1, H do
+      grid[y] = {}
+      for x = 1, W do
+        if y == 1 or y == H or x == 1 or x == W then
+          grid[y][x] = T_WALL
         else
-          local glow = (math.floor(now() * 8) % 2 == 0) and "▓▓▓" or "▒▒▒"
-          put(ox - 1, ob.y, glow, pal.danger, pal.bg)
-          put(ox, ob.y, "▲", pal.text, pal.danger)
+          grid[y][x] = T_EMPTY
         end
       end
     end
-
-    local px = laneX(lane)
-    if shield then
-      local pulse = (math.floor(now() * 6) % 2 == 0) and pal.shield or pal.accent
-      put(px - 2, playerY, "░", pulse, pal.bg)
-      put(px + 2, playerY, "░", pulse, pal.bg)
+    grid[RROW][2] = T_REACTOR
+    grid[RROW][3] = T_PIPE_H
+    grid[RROW][4] = T_PIPE_H
+    grid[RROW][5] = T_VALVE
+    for _, ty in ipairs({ 4, 8, 12 }) do
+      grid[ty][W - 1] = T_TANK
+      grid[ty][W - 2] = T_PIPE_H
+      grid[ty][W - 3] = T_VALVE
     end
-    put(px, playerY - 1, "▲", pal.player, pal.bg)
-    put(px - 1, playerY, "▄█▄", pal.player, pal.bg)
-
-    put(2, h - 1, "[<-/-> ou A/D] Mover  [P] Pausa  [Q] Sair", pal.muted, pal.bg)
-
-    if state == "menu" then
-      local bw, bh = math.min(w - 6, 40), 10
-      local bx, by = math.floor((w - bw) / 2), math.floor(h / 2) - 5
-      box(bx, by, bw, bh, pal.panel, pal.accent)
-      put(bx + 2, by + 1, "DESVIO NO REATOR", pal.player, pal.panel)
-      put(bx + 2, by + 2, string.format("Recorde: %d", best), pal.muted, pal.panel)
-
-      local opts = {
-        "Jogar",
-        "Velocidade: " .. (fastMode and "Rapido" or "Normal"),
-        "Sair"
-      }
-      for i = 1, 3 do
-        local sel = (menuIdx == i)
-        local fg = sel and pal.player or pal.text
-        local prefix = sel and "> " or "  "
-        put(bx + 2, by + 3 + i, prefix .. opts[i], fg, pal.panel)
+    for x = 6, W - 5 do
+      if x % 4 == 0 then grid[RROW][x] = T_PIPE_H end
+    end
+    for y = 3, H - 2 do
+      if y % 4 == 0 and y ~= RROW then
+        grid[y][10] = T_PIPE_V
+        grid[y][22] = T_PIPE_V
       end
-      put(bx + 2, by + 8, "[Cima/Baixo] Escolher  [Enter] OK", pal.accent, pal.panel)
-    elseif state == "paused" then
-      local bw, bh = 28, 3
-      local bx, by = math.floor((w - bw) / 2), math.floor(h / 2) - 1
-      box(bx, by, bw, bh, pal.panel, pal.player)
-      put(bx + 3, by + 1, "PAUSADO - [P] continuar", pal.player, pal.panel)
-    elseif state == "gameover" then
-      local blinkBg = (math.floor(now() * 4) % 2 == 0) and pal.danger or pal.panel
-      local blinkFg = (math.floor(now() * 4) % 2 == 0) and pal.text or pal.danger
-      local bw, bh = math.min(w - 6, 38), 7
-      local bx, by = math.floor((w - bw) / 2), math.floor(h / 2) - 3
-      box(bx, by, bw, bh, blinkBg, blinkFg)
-      put(bx + 2, by + 1, "FALHA DE CONTENCAO!", pal.text, blinkBg)
-      put(bx + 2, by + 2, string.format("Pontuacao: %d (Rec: %d)", math.floor(score), best), pal.text, blinkBg)
-      put(bx + 2, by + 4, "[ENTER/R] Reiniciar   [M] Menu", pal.player, blinkBg)
     end
+    -- paredes extras conforme o nivel (sequencia deterministica)
+    local extra = math.min(18, 3 + level * 3 + tanks)
+    local seed = level * 997 + tanks * 131 + 17
+    local placed, guard = 0, 0
+    while placed < extra and guard < 250 do
+      guard = guard + 1
+      seed = (seed * 1103515245 + 12345) % 2147483648
+      local wx = 6 + (seed % (W - 9))
+      seed = (seed * 1103515245 + 12345) % 2147483648
+      local wy = 2 + (seed % (H - 3))
+      local nearReactor = (wx <= 6 and math.abs(wy - RROW) <= 1)
+      local nearTank = (wx >= W - 4)
+      if not nearReactor and not nearTank and grid[wy][wx] == T_EMPTY then
+        grid[wy][wx] = T_WALL
+        placed = placed + 1
+      end
+    end
+    return grid
   end
 
-  local function step()
-    local t = now()
-    if t - lastScore >= 0.25 then
-      lastScore = t
-      score = score + 1
-      if math.floor(score) % 30 == 0 and stepDelay > 0.09 then
-        stepDelay = math.max(0.09, stepDelay - 0.02)
-      end
-    end
+  local function initState(best)
+    local grid = newGrid(1, 0)
+    return {
+      grid = grid,
+      leaks = { { x = 3, y = RROW, dx = 1, dy = 0, life = 0 } },
+      trail = {},            -- trail[y*W+x] = passos restantes
+      cx = 7, cy = RROW,
+      score = 0, best = best,
+      damage = 0, tanksFilled = 0, level = 1,
+      elapsed = 0, stepAccum = 0, stepInterval = STEP_TIME,
+      status = "Setas: mover | Espaco: valvula | Esc: sair",
+      gameOver = false, dirty = true,
+      delayNewLeak = 0,
+    }
+  end
 
-    if t - lastStep >= stepDelay then
-      lastStep = t
+  local function hurt(state, msg)
+    state.damage = math.min(MAX_DAMAGE, state.damage + DAMAGE_PER_HIT)
+    state.status = msg
+  end
 
-      scroll = scroll + 1
-      for _, st in ipairs(stars) do
-        st.y = st.y + 1
-        if st.y > h then
-          st.y = 2
-          st.x = math.random(1, w)
-        end
-      end
+  local function touchTrail(state, x, y)
+    state.trail[y * W + x] = TRAIL_LIFE
+  end
 
-      local kept = {}
-      for _, ob in ipairs(obstacles) do
-        local ny = ob.y + 1
-        if (ny == playerY or ny == playerY - 1) and ob.lane == lane then
-          if ob.kind == "cool" then
-            shield = true
-            score = score + 15
-          elseif shield then
-            shield = false
-            score = score + 10
-          else
-            local finalPts = math.floor(score)
-            if finalPts > best then
-              best = finalPts
-              cfg.recorde = best
-              saveCfg(cfg)
-            end
-            state = "gameover"
+  -- um passo do vazamento: cada vazamento anda 1 celula
+  local function stepLeaks(state)
+    local grid = state.grid
+    local nextLeaks = {}
+    for _, lk in ipairs(state.leaks) do
+      local nx, ny = lk.x + lk.dx, lk.y + lk.dy
+      if nx < 2 or nx > W - 1 or ny < 2 or ny > H - 1 then
+        hurt(state, "Vazamento na borda!")
+      else
+        local cell = grid[ny][nx]
+        if cell == T_WALL then
+          hurt(state, "Bateu na parede!")
+        elseif cell == T_TANK then
+          state.score = state.score + 50
+          state.tanksFilled = state.tanksFilled + 1
+          grid[ny][nx] = T_WALL
+          state.status = "Tanque cheio! +50 pts"
+          if state.tanksFilled % 3 == 0 then
+            state.level = state.level + 1
+            state.stepInterval = math.max(0.22, state.stepInterval - 0.08)
+            state.grid = newGrid(state.level, state.tanksFilled)
+            state.leaks, state.trail = {}, {}
+            state.status = "Nivel " .. state.level .. "! Mais rapido"
             return
           end
-        elseif ny <= botY then
-          ob.y = ny
-          table.insert(kept, ob)
+        elseif cell == T_VALVE then
+          local branched = false
+          local dirs = { { 0, -1 }, { 0, 1 }, { lk.dx, lk.dy } }
+          for _, d in ipairs(dirs) do
+            local tx, ty = nx + d[1], ny + d[2]
+            if tx >= 2 and tx <= W - 1 and ty >= 2 and ty <= H - 1 then
+              local t = grid[ty][tx]
+              if t ~= T_WALL and t ~= T_REACTOR and not branched and #nextLeaks < MAX_LEAKS then
+                nextLeaks[#nextLeaks + 1] = { x = nx, y = ny, dx = d[1], dy = d[2], life = 0 }
+                branched = true
+              end
+            end
+          end
+          if not branched then hurt(state, "Valvula bloqueada!") end
+        elseif cell == T_PIPE_H and lk.dy ~= 0 then
+          hurt(state, "Cano horizontal fechado!")
+        elseif cell == T_PIPE_V and lk.dx ~= 0 then
+          hurt(state, "Cano vertical fechado!")
+        else
+          -- vazio ou cano na direcao certa: o vazamento segue
+          if cell == T_EMPTY or cell == T_PIPE_H or cell == T_PIPE_V then
+            if #nextLeaks < MAX_LEAKS then
+              nextLeaks[#nextLeaks + 1] = { x = nx, y = ny, dx = lk.dx, dy = lk.dy, life = 0 }
+            end
+          end
+        end
+        if cell == T_EMPTY or cell == T_PIPE_H or cell == T_PIPE_V or cell == T_VALVE then
+          touchTrail(state, nx, ny)
         end
       end
-      obstacles = kept
+    end
+    state.leaks = nextLeaks
 
-      if spawnCd <= 0 then
-        local l1 = math.random(1, lanes)
-        local k1 = (math.random(1, 7) == 1) and "cool" or "rad"
-        table.insert(obstacles, { lane = l1, y = topY, kind = k1 })
-        if math.random(1, 3) == 1 then
-          table.insert(obstacles, { lane = (l1 % lanes) + 1, y = topY, kind = "rad" })
-        end
-        spawnCd = 2
+    -- sem vazamento ativo: cria um novo no reator, com intervalo (sem dano duplicado)
+    if #state.leaks == 0 and state.damage < MAX_DAMAGE then
+      if state.delayNewLeak <= 0 then
+        state.leaks[1] = { x = 3, y = RROW, dx = 1, dy = 0, life = 0 }
+        state.delayNewLeak = 2
       else
-        spawnCd = spawnCd - 1
+        state.delayNewLeak = state.delayNewLeak - 1
       end
     end
   end
 
+  -- apaga o rastro com o tempo (passos)
+  local function ageTrail(state)
+    for k, life in pairs(state.trail) do
+      if life <= 1 then
+        state.trail[k] = nil
+      else
+        state.trail[k] = life - 1
+      end
+    end
+  end
+
+  local function fullDraw(state)
+    local sw, sh = gpu.getResolution()
+    gpu.setBackground(C.bg)
+    gpu.setForeground(C.text)
+    gpu.fill(1, 1, sw, sh, " ")
+    local ox = math.max(1, math.floor((sw - W) / 2) + 1)
+    local oy = math.max(2, math.floor((sh - H) / 2))
+    gpu.setForeground(C.accent)
+    local top = string.format("FUGA DE RADIACAO | Nv:%d | Tanques:%d | Rec:%d",
+      state.level, state.tanksFilled, state.best)
+    gpu.set(ox, math.max(1, oy - 1), top:sub(1, sw))
+    state.oxf, state.oyf = ox, oy
+    for y = 1, H do
+      for x = 1, W do
+        local ch = state.grid[y][x]
+        local k = y * W + x
+        if state.trail[k] and (ch == T_EMPTY or ch == T_PIPE_H or ch == T_PIPE_V) then
+          ch = T_LEAK
+        end
+        local isLeak = false
+        for _, lk in ipairs(state.leaks) do
+          if lk.x == x and lk.y == y then isLeak = true break end
+        end
+        if isLeak then ch = T_LEAK end
+        gpu.setBackground(C.bg)
+        gpu.setForeground(C.text)
+        if ch == T_LEAK then gpu.setForeground(C.ok)
+        elseif ch == T_REACTOR then gpu.setForeground(C.warn)
+        elseif ch == T_TANK then gpu.setForeground(C.accent)
+        elseif ch == T_WALL then gpu.setForeground(C.dim)
+        elseif ch == T_VALVE then gpu.setForeground(C.warn) end
+        if x == state.cx and y == state.cy then
+          gpu.setBackground(C.accent)
+          gpu.setForeground(C.bg)
+        end
+        gpu.set(ox + x - 1, oy + y - 1, ch)
+      end
+    end
+    gpu.setBackground(C.bg)
+    state.dirty = false
+  end
+
+  local function drawBar(state)
+    local sw, sh = gpu.getResolution()
+    local barY = math.min(sh, (state.oyf or 2) + H)
+    gpu.setBackground(C.panel)
+    gpu.setForeground(C.text)
+    gpu.fill(1, barY, sw, 1, " ")
+    local info = string.format("Pts:%d | Tempo:%.1fs | ", state.score, state.elapsed)
+    gpu.set(1, barY, info)
+    local dmgColor = (state.damage >= 70 and C.err) or (state.damage >= 40 and C.warn) or C.ok
+    local dmg = string.format("Dano:%d%%", state.damage)
+    gpu.setForeground(dmgColor)
+    gpu.set(1 + #info, barY, dmg)
+    gpu.setForeground(C.dim)
+    local pos = 1 + #info + #dmg + 2
+    if pos < sw then gpu.set(pos, barY, ("[" .. state.status .. "]"):sub(1, sw - pos + 1)) end
+    gpu.setBackground(C.bg)
+  end
+
+  local function gameOverBox(state)
+    local sw, sh = gpu.getResolution()
+    local bw, bh = math.min(36, sw - 4), 7
+    local bx = math.max(1, math.floor((sw - bw) / 2) + 1)
+    local by = math.max(1, math.floor((sh - bh) / 2) + 1)
+    gpu.setBackground(C.panel)
+    gpu.fill(bx, by, bw, bh, " ")
+    gpu.setForeground(C.err)
+    gpu.set(bx + 2, by + 1, "Fim de jogo")
+    gpu.setForeground(C.text)
+    gpu.set(bx + 2, by + 2, ("Pontuacao: " .. state.score .. " (Rec: " .. state.best .. ")"):sub(1, bw - 4))
+    gpu.setForeground(C.ok)
+    gpu.set(bx + 2, by + 4, "Enter: jogar de novo")
+    gpu.setForeground(C.dim)
+    gpu.set(bx + 2, by + 5, "Esc: sair")
+    gpu.setBackground(C.bg)
+  end
+
+  local function handleKey(state, ch, code)
+    if state.gameOver then
+      if code == 28 then
+        local best = state.best
+        return initState(best)
+      end
+      return state
+    end
+    if code == 200 and state.cy > 2 then state.cy = state.cy - 1; state.dirty = true
+    elseif code == 208 and state.cy < H - 1 then state.cy = state.cy + 1; state.dirty = true
+    elseif code == 203 and state.cx > 2 then state.cx = state.cx - 1; state.dirty = true
+    elseif code == 205 and state.cx < W - 1 then state.cx = state.cx + 1; state.dirty = true
+    elseif ch == 32 then
+      local cur = state.grid[state.cy][state.cx]
+      if cur == T_EMPTY then
+        state.grid[state.cy][state.cx] = T_VALVE
+        state.status = "Valvula colocada"
+      elseif cur == T_VALVE then
+        state.grid[state.cy][state.cx] = T_EMPTY
+        state.status = "Valvula removida"
+      else
+        state.status = "Celula ocupada"
+      end
+      state.dirty = true
+    end
+    return state
+  end
+
+  local best = loadBest()
+  local state = initState(best)
+  fullDraw(state)
+  drawBar(state)
+
+  local lastTick = nil
+  local ticks = 0
   while true do
-    local ev, _, chr, code = pull(0.05)
-
+    local ev, _, ch, code = nitro.pull(0.1)
+    -- so conta tempo quando o pull expirou sem evento (tecla nao acelera o jogo)
+    local dt = (ev == nil) and 0.1 or 0
     if ev == "key_down" then
-      local ch = (type(chr) == "number" and chr > 0 and chr < 256) and string.char(chr):lower() or ""
-      code = tonumber(code)
-
-      if state == "menu" then
-        if code == 200 or ch == "w" then
-          menuIdx = (menuIdx == 1) and 3 or (menuIdx - 1)
-        elseif code == 208 or ch == "s" then
-          menuIdx = (menuIdx % 3) + 1
-        elseif (code == 203 or code == 205 or ch == "a" or ch == "d") and menuIdx == 2 then
-          toggleSpeed()
-        elseif ch == "\r" or ch == "\n" or ch == " " or code == 28 or code == 57 then
-          if menuIdx == 1 then
-            reset()
-            state = "playing"
-          elseif menuIdx == 2 then
-            toggleSpeed()
-          elseif menuIdx == 3 then
-            break
-          end
-        elseif ch == "q" or code == 16 then
-          break
+      if code == 1 then
+        if state.score > state.best then
+          state.best = state.score
+          saveBest(state.best)
         end
-      elseif state == "playing" then
-        if ch == "q" or code == 16 then
-          break
-        elseif code == 203 or ch == "a" then
-          moveLeft()
-        elseif code == 205 or ch == "d" then
-          moveRight()
-        elseif ch == "p" or code == 25 then
-          state = "paused"
-        end
-      elseif state == "paused" then
-        if ch == "q" or code == 16 then
-          break
-        elseif ch == "p" or code == 25 then
-          state = "playing"
-          lastStep = now()
-          lastScore = now()
-        end
-      elseif state == "gameover" then
-        if ch == "q" or code == 16 then
-          break
-        elseif ch == "m" or code == 50 then
-          state = "menu"
-        elseif ch == "\r" or ch == "\n" or ch == "r" or code == 28 or code == 19 then
-          reset()
-          state = "playing"
-        end
+        return
       end
-    elseif ev == "touch" then
-      local tx, ty = tonumber(chr), tonumber(code)
-      if state == "menu" then
-        local bw, bh = math.min(w - 6, 40), 10
-        local bx, by = math.floor((w - bw) / 2), math.floor(h / 2) - 5
-        if tx and ty and tx >= bx and tx <= bx + bw and ty >= by and ty <= by + bh then
-          if ty == by + 4 then
-            menuIdx = 1
-            reset()
-            state = "playing"
-          elseif ty == by + 5 then
-            menuIdx = 2
-            toggleSpeed()
-          elseif ty == by + 6 then
-            break
+      state = handleKey(state, ch, code)
+    end
+
+    if not state.gameOver then
+      -- tempo medido pelo intervalo real (nao pelo numero de teclas apertadas)
+      ticks = ticks + 1
+      state.elapsed = state.elapsed + dt
+      state.stepAccum = state.stepAccum + dt
+      while state.stepAccum >= state.stepInterval and not state.gameOver do
+        state.stepAccum = state.stepAccum - state.stepInterval
+        stepLeaks(state)
+        ageTrail(state)
+        state.dirty = true
+        if state.damage >= MAX_DAMAGE then
+          state.damage = MAX_DAMAGE
+          state.gameOver = true
+          if state.score > state.best then
+            state.best = state.score
+            saveBest(state.best)
           end
-        end
-      elseif state == "gameover" then
-        reset()
-        state = "playing"
-      elseif state == "playing" and tx then
-        if tx < laneX(lane) then moveLeft()
-        elseif tx > laneX(lane) then moveRight()
         end
       end
     end
 
-    if state == "playing" then
-      step()
+    -- redesenha so quando algo mudou (sem piscar)
+    if state.dirty or ticks % 5 == 0 then
+      fullDraw(state)
+      drawBar(state)
+      if state.gameOver then gameOverBox(state) end
     end
-
-    render()
-  end
-end
-
-local ok, err = pcall(run)
-if not ok then
-  local p = getPalette()
-  local w, h = getSize()
-  rectBg(1, 1, w, h, p.danger)
-  put(2, 2, "Erro no Desvio no Reator:", p.text, p.danger)
-  put(2, 3, tostring(err), p.player, p.danger)
-  if type(nitro) == "table" and type(nitro.pull) == "function" then
-    safeCall(nitro.pull, 2.0)
   end
 end
