@@ -1,6 +1,6 @@
 -- name: Fuga de Radiacao
 -- desc: Desvie o vazamento do reator para os tanques de contencao
--- ver: 1.1
+-- ver: 1.2
 -- LIMITES: jogo de ficcao (liquido verde ficticio). So texto/ASCII, sem som, imagens ou rede.
 -- Recorde salvo com nitro.cfg.
 
@@ -19,7 +19,9 @@ return function(args)
   local DAMAGE_PER_HIT = 10
   local MAX_DAMAGE = 100
 
+  -- recorde: usa nitro.cfg se existir (versoes antigas do sistema nao tem)
   local function loadBest()
+    if type(nitro.cfg) ~= "table" or type(nitro.cfg.load) ~= "function" then return 0 end
     local ok, data = pcall(nitro.cfg.load, "recorde")
     if ok and type(data) == "table" and type(data.melhor) == "number" then
       return math.floor(data.melhor)
@@ -28,6 +30,7 @@ return function(args)
   end
 
   local function saveBest(val)
+    if type(nitro.cfg) ~= "table" or type(nitro.cfg.save) ~= "function" then return end
     pcall(nitro.cfg.save, "recorde", { melhor = math.floor(val) })
   end
 
